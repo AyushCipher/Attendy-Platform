@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: attendy
+          POSTGRES_PASSWORD: attendy_dev
+          POSTGRES_DB: attendy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U attendy -d attendy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://attendy:attendy_dev@localhost:5432/attendy
+      JWT_SECRET: ci-test-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: attendy-v2/backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: attendy-v2/backend
+        run: pip install -r requirements.txt
+
+      - name: Lint
+        working-directory: attendy-v2/backend
+        run: ruff check .
+
+      # Downloaded once by whichever test first constructs a FaceEngine; cached across
+      # runs since it's a ~300MB fixed model pack, not something that changes per-commit.
+      - name: Cache InsightFace model pack
+        uses: actions/cache@v4
+        with:
+          path: ~/.insightface
+          key: insightface-buffalo_l
+
+      - name: Run tests
+        working-directory: attendy-v2/backend
+        run: pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: attendy-v2/frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: attendy-v2/frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: attendy-v2/frontend
+        run: npm run lint
+
+      - name: Type-check and build
+        working-directory: attendy-v2/frontend
+        run: npm run build
+
+      - name: Run tests
+        working-directory: attendy-v2/frontend
+        run: npm run test

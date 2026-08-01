@@ -1,0 +1,54 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: attendy
+      POSTGRES_PASSWORD: attendy_dev
+      POSTGRES_DB: attendy
+    ports:
+      - "5455:5432"  # 5432 is taken by a native Windows Postgres service on this machine
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attendy -d attendy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    depends_on:
+      - db
+
+  # Full containerized stack -- day-to-day dev runs backend/frontend natively for fast
+  # iteration (uvicorn --reload, vite dev server); this profile proves the app is
+  # actually deployable end-to-end from the Dockerfiles: `docker compose --profile full up --build`
+  backend:
+    build: ./backend
+    profiles: ["full"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://attendy:attendy_dev@db:5432/attendy
+      JWT_SECRET: dev-secret-change-me-in-production-32bytes+
+      CORS_ORIGINS: '["http://localhost:8080"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    profiles: ["full"]
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
