@@ -7,9 +7,12 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8000',
+      // Explicit 127.0.0.1, not "localhost" -- Node's DNS resolution can prefer
+      // ::1 (IPv6) for "localhost", which silently routes here to whatever else
+      // happens to be listening on that address instead of our IPv4-bound uvicorn.
+      '/api': 'http://127.0.0.1:8000',
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: 'ws://127.0.0.1:8000',
         ws: true,
       },
     },
