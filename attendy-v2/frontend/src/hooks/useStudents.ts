@@ -28,7 +28,7 @@ export function useStudents(filters: StudentFilters) {
 export function useCreateStudent() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: { name: string; roll_number: number; class_section_id: string }) =>
+    mutationFn: async (payload: { name: string; roll_number: number; grade: number; section: string }) =>
       (await api.post<Student>('/students', payload)).data,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['students'] })

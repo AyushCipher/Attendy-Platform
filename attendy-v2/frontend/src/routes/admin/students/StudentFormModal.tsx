@@ -3,14 +3,17 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Modal } from '../../../components/common/Modal'
-import { useClassSections, useCreateClassSection } from '../../../hooks/useClassSections'
 import { useCreateStudent } from '../../../hooks/useStudents'
 import type { Student } from '../../../types'
+
+const GRADES = Array.from({ length: 12 }, (_, i) => i + 1)
+const SECTIONS = ['A', 'B', 'C', 'D', 'E', 'F'] as const
 
 const schema = z.object({
   name: z.string().min(1, 'Required'),
   roll_number: z.string().min(1, 'Required').regex(/^\d+$/, 'Must be a number'),
-  class_section_id: z.string().min(1, 'Required'),
+  grade: z.string().min(1, 'Required'),
+  section: z.string().min(1, 'Required'),
 })
 
 type FormValues = z.infer<typeof schema>
@@ -21,36 +24,23 @@ interface StudentFormModalProps {
 }
 
 export function StudentFormModal({ onClose, onCreated }: StudentFormModalProps) {
-  const { data: classSections } = useClassSections()
   const createStudent = useCreateStudent()
-  const createClassSection = useCreateClassSection()
   const [serverError, setServerError] = useState<string | null>(null)
-  const [showNewClassSection, setShowNewClassSection] = useState(false)
-  const [newGrade, setNewGrade] = useState('')
-  const [newSection, setNewSection] = useState('')
 
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({ resolver: zodResolver(schema) })
-
-  async function handleCreateClassSection() {
-    if (!newGrade || !newSection) return
-    const cs = await createClassSection.mutateAsync({ grade: Number(newGrade), section: newSection })
-    setValue('class_section_id', cs.id)
-    setShowNewClassSection(false)
-    setNewGrade('')
-    setNewSection('')
-  }
 
   async function onSubmit(values: FormValues) {
     setServerError(null)
     try {
       const student = await createStudent.mutateAsync({
-        ...values,
+        name: values.name,
         roll_number: Number(values.roll_number),
+        grade: Number(values.grade),
+        section: values.section,
       })
       onCreated(student)
     } catch (err: unknown) {
@@ -65,8 +55,11 @@ export function StudentFormModal({ onClose, onCreated }: StudentFormModalProps) 
     <Modal title="Add student" onClose={onClose}>
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-3">
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Name</label>
+          <label htmlFor="name" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Name
+          </label>
           <input
+            id="name"
             {...register('name')}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 dark:border-gray-700 dark:bg-gray-800"
           />
@@ -74,8 +67,14 @@ export function StudentFormModal({ onClose, onCreated }: StudentFormModalProps) 
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">Roll number</label>
+          <label
+            htmlFor="roll_number"
+            className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
+          >
+            Roll number
+          </label>
           <input
+            id="roll_number"
             type="number"
             {...register('roll_number')}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 dark:border-gray-700 dark:bg-gray-800"
@@ -83,63 +82,47 @@ export function StudentFormModal({ onClose, onCreated }: StudentFormModalProps) 
           {errors.roll_number && <p className="mt-1 text-xs text-red-600">{errors.roll_number.message}</p>}
         </div>
 
-        <div>
-          <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-            Class / Section
-          </label>
-          <select
-            {...register('class_section_id')}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 dark:border-gray-700 dark:bg-gray-800"
-          >
-            <option value="">Select…</option>
-            {classSections?.map((cs) => (
-              <option key={cs.id} value={cs.id}>
-                {cs.label}
-              </option>
-            ))}
-          </select>
-          {errors.class_section_id && (
-            <p className="mt-1 text-xs text-red-600">{errors.class_section_id.message}</p>
-          )}
-
-          {!showNewClassSection ? (
-            <button
-              type="button"
-              onClick={() => setShowNewClassSection(true)}
-              className="mt-1 text-xs font-medium text-brand-600 hover:underline dark:text-brand-400"
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <label htmlFor="grade" className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Class
+            </label>
+            <select
+              id="grade"
+              {...register('grade')}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 dark:border-gray-700 dark:bg-gray-800"
             >
-              + New class/section
-            </button>
-          ) : (
-            <div className="mt-2 flex items-end gap-2">
-              <div>
-                <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Grade</label>
-                <input
-                  type="number"
-                  value={newGrade}
-                  onChange={(e) => setNewGrade(e.target.value)}
-                  className="w-20 rounded-lg border border-gray-300 px-2 py-1.5 text-sm dark:border-gray-700 dark:bg-gray-800"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-gray-500 dark:text-gray-400">Section</label>
-                <input
-                  value={newSection}
-                  onChange={(e) => setNewSection(e.target.value.toUpperCase())}
-                  maxLength={4}
-                  className="w-20 rounded-lg border border-gray-300 px-2 py-1.5 text-sm dark:border-gray-700 dark:bg-gray-800"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={handleCreateClassSection}
-                disabled={createClassSection.isPending}
-                className="rounded-lg bg-gray-900 px-3 py-1.5 text-sm text-white hover:bg-gray-700 dark:bg-gray-100 dark:text-gray-900"
-              >
-                Add
-              </button>
-            </div>
-          )}
+              <option value="">Select…</option>
+              {GRADES.map((g) => (
+                <option key={g} value={g}>
+                  Class {g}
+                </option>
+              ))}
+            </select>
+            {errors.grade && <p className="mt-1 text-xs text-red-600">{errors.grade.message}</p>}
+          </div>
+
+          <div className="flex-1">
+            <label
+              htmlFor="section"
+              className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
+            >
+              Section
+            </label>
+            <select
+              id="section"
+              {...register('section')}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 dark:border-gray-700 dark:bg-gray-800"
+            >
+              <option value="">Select…</option>
+              {SECTIONS.map((s) => (
+                <option key={s} value={s}>
+                  Section {s}
+                </option>
+              ))}
+            </select>
+            {errors.section && <p className="mt-1 text-xs text-red-600">{errors.section.message}</p>}
+          </div>
         </div>
 
         {serverError && (

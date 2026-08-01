@@ -29,25 +29,39 @@ PostgreSQL + pgvector · InsightFace (ArcFace) · WebSockets · Docker · GitHub
 
 ## Overview
 
-Attendy is a school attendance system that recognizes students from a live webcam
-feed and marks attendance the instant a face is confirmed — with the confirmation
-pushed to every open admin dashboard in real time. It replaces a legacy Flask +
-OpenCV prototype that used CSV files for storage and a face recognizer that simply
-didn't work reliably after training.
+Attendy is a school management system that recognizes students from a live webcam
+feed and marks attendance, meals, and library activity the instant they're confirmed
+— with confirmations pushed to every open admin dashboard in real time. It replaces
+a legacy Flask + OpenCV prototype that used CSV files for storage and a face
+recognizer that simply didn't work reliably after training.
 
 ## Features
 
 - **Guided face enrollment** — a browser-based burst-capture wizard walks a student
   through several poses (straight, left, right, chin down), extracting a 512-d ArcFace
-  embedding per usable capture. No special hardware, just a webcam.
-- **Real-time recognition** — live video frames stream over WebSocket to the backend,
-  which detects, embeds, and matches faces against stored embeddings via pgvector
-  cosine similarity.
+  embedding per usable capture. No special hardware, just a webcam. The first usable
+  capture also becomes the student's profile photo.
+- **QR ID cards** — every student and every registered book gets a QR code encoding
+  its own UUID (not `"{name} {roll}"` or `"BOOK:<id>:<name>"` like the legacy app,
+  which silently broke on multi-word names) — downloadable for printing.
+- **Three scan modes, one shared pipeline** (`/ws/recognize?mode=`), not three
+  parallel implementations:
+  - **Attendance** — face *or* QR marks the daily attendance sheet.
+  - **Mess** — face recognition only, no QR fallback, marks the daily meal sheet.
+  - **Library** — a two-step scan (identify the student by face or QR, then scan a
+    book's QR) that borrows or returns it, rejecting a book already out to someone
+    else.
 - **Temporal smoothing + liveness** — a per-connection face tracker (IoU-based) requires
   5-of-8 consistent frame matches before confirming an identity, plus a
   bounding-box-motion check so a photo held up to the camera can't be marked present.
-- **Instant, server-side-filtered attendance sheet** — filter by class, section, date,
-  and status, all resolved in SQL — not the dead client-side filter dropdown the
+  (QR identification skips this gate entirely — a decoded UUID is an exact match,
+  nothing probabilistic to smooth over.)
+- **Overdue library fines** — ₹100 per 7-day period a book remains unreturned,
+  recomputed (not incremented) daily by a scheduled job, so it can never
+  double-charge; cleared only by an explicit admin "settle fine" action, independent
+  of the book actually being returned.
+- **Instant, server-side-filtered attendance/meal sheets** — filter by class, section,
+  date, and status, all resolved in SQL — not the dead client-side filter dropdown the
   legacy admin UI shipped with.
 - **Live dashboard updates** — confirmed attendance is broadcast over a second
   WebSocket channel and patched directly into the frontend's query cache, so every
@@ -118,6 +132,8 @@ of a status column) live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | Frontend | React 19, TypeScript, Tailwind CSS v4, Vite, TanStack Query, Zustand, React Hook Form + Zod, Recharts |
 | Backend | FastAPI, SQLAlchemy 2.0 (async), Pydantic v2, PyJWT, bcrypt, Alembic |
 | Face recognition | InsightFace (`buffalo_l` / ArcFace), ONNX Runtime, OpenCV (headless) |
+| QR codes | `qrcode` (generation), OpenCV `QRCodeDetector` (decoding) |
+| Scheduling | APScheduler (daily overdue-fine job) |
 | Database | PostgreSQL 16 + [`pgvector`](https://github.com/pgvector/pgvector) (HNSW cosine index) |
 | Real-time | Native FastAPI/Starlette WebSockets |
 | Testing | pytest + pytest-asyncio (isolated test database), Vitest + React Testing Library |
@@ -129,17 +145,22 @@ of a status column) live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 attendy-v2/
 ├── backend/
 │   ├── app/
-│   │   ├── api/routes/       # REST endpoints: auth, students, class_sections, attendance
+│   │   ├── api/routes/       # REST endpoints: auth, students, class_sections,
+│   │   │                     #   attendance (+ /meals), books (+ /borrows)
 │   │   ├── core/             # settings (pydantic-settings) and JWT/password security
 │   │   ├── db/
 │   │   │   └── models/       # SQLAlchemy models: admin, student, class_section,
-│   │   │                     #   face_embedding (pgvector), attendance
+│   │   │                     #   face_embedding (pgvector), attendance, meal,
+│   │   │                     #   book, book_borrow
 │   │   ├── schemas/          # Pydantic request/response schemas
 │   │   ├── services/         # face_engine, matcher (pgvector search), tracker
 │   │   │                     #   (temporal smoothing + liveness), attendance_service,
+│   │   │                     #   meal_service, library_service (borrow/fine formula),
+│   │   │                     #   fine_job (scheduled), qr_service, photo_service,
 │   │   │                     #   analytics_service, export_service (xlsx)
-│   │   ├── ws/                # /ws/recognize and /ws/attendance-feed handlers
-│   │   └── main.py
+│   │   ├── ws/                # /ws/recognize (mode=attendance|mess|library)
+│   │   │                     #   and /ws/attendance-feed handlers
+│   │   └── main.py            # incl. APScheduler lifespan for the fine job
 │   ├── alembic/               # DB migrations (incl. `CREATE EXTENSION vector`)
 │   ├── scripts/               # seed_admin, calibrate_threshold, WS smoke test
 │   ├── tests/                 # pytest: unit/ + integration/ (own isolated DB)
@@ -151,11 +172,14 @@ attendy-v2/
 │       │   └── admin/
 │       │       ├── dashboard/    # trend chart + chronic-absentee list
 │       │       ├── attendance/   # filterable, live-updating sheet + export
-│       │       ├── students/     # CRUD + face enrollment wizard
-│       │       └── scan/         # live camera + recognition overlay
+│       │       ├── meals/        # meal sheet (mirrors attendance)
+│       │       ├── library/      # book registry + currently-borrowed/fines table
+│       │       ├── students/     # CRUD + face enrollment wizard + ID card + photo
+│       │       └── scan/         # mode picker + attendance/mess/library scan pages
 │       ├── components/{layout,common}/
 │       ├── hooks/                 # React Query hooks incl. the WS feed cache-patcher
-│       ├── lib/                   # axios client (auto refresh), query client
+│       │                          #   and the shared useRecognitionSocket
+│       ├── lib/                   # axios client (auto refresh), query client, canvas overlay
 │       └── store/                 # Zustand auth store
 ├── docs/
 │   ├── ARCHITECTURE.md
@@ -177,17 +201,25 @@ bearer token.
 | GET | `/api/auth/me` | Current admin profile |
 | GET / POST | `/api/class-sections` | List / create class-sections |
 | DELETE | `/api/class-sections/{id}` | Delete a class-section |
-| GET / POST | `/api/students` | List (filterable) / create students |
+| GET / POST | `/api/students` | List (filterable by grade/section/status/search) / create students |
 | GET / PATCH / DELETE | `/api/students/{id}` | Read / update / soft-delete a student |
-| POST | `/api/students/{id}/enroll-face` | Upload burst-capture photos → store embeddings |
+| POST | `/api/students/{id}/enroll-face` | Upload burst-capture photos → store embeddings + profile photo |
 | DELETE | `/api/students/{id}/face-embeddings` | Clear stored embeddings (re-enroll) |
+| GET | `/api/students/{id}/qr-code` | Student ID-card QR (PNG, encodes the student UUID) |
+| GET | `/api/students/{id}/photo` | Student's profile photo (PNG/JPEG, captured at enrollment) |
 | GET | `/api/attendance` | Filterable attendance sheet (date, class, status, search) |
 | POST | `/api/attendance/manual` | Admin override (mark present/absent for a date) |
 | GET | `/api/attendance/export` | Export the filtered sheet as `.xlsx` |
+| GET | `/api/attendance/meals` | Filterable meal sheet — same shape as `/attendance` |
 | GET | `/api/attendance/analytics/summary` | Daily present/absent counts over a date range |
 | GET | `/api/attendance/analytics/chronic-absentees` | Students over an absence-rate threshold |
-| WS | `/ws/recognize` | Bidirectional: JPEG frames in, recognition overlay + attendance marks out |
-| WS | `/ws/attendance-feed` | Broadcast channel: live `attendance_confirmed` events |
+| GET / POST | `/api/books` | List (filterable) / register books |
+| DELETE | `/api/books/{id}` | Soft-delete (retire) a book |
+| GET | `/api/books/{id}/qr-code` | Book QR (PNG, encodes the book UUID) |
+| GET | `/api/books/borrows` | Currently-borrowed books with live-computed fines |
+| POST | `/api/books/borrows/{id}/settle-fine` | Mark a fine as settled (does not touch the borrow itself) |
+| WS | `/ws/recognize?mode=attendance\|mess\|library` | Bidirectional: JPEG frames in, recognition/scan overlay + marks out |
+| WS | `/ws/attendance-feed` | Broadcast channel: live `attendance_confirmed` / `meal_confirmed` events |
 | GET | `/api/health` | Health check |
 
 ## Getting Started
@@ -279,8 +311,6 @@ Docker database is a `DATABASE_URL` change, not a code change — see
 
 ## Roadmap
 
-- Library issue/return tracking and mid-day-meal tracking (present in the legacy app,
-  intentionally not ported yet — this rewrite focused on making the attendance module
-  solid first) using the same face/DB/API/UI patterns established here.
 - PDF export alongside the existing Excel export.
 - Email/SMS absence notifications to parents.
+- Email/SMS reminders for students with an unsettled library fine.

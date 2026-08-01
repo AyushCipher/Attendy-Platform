@@ -51,8 +51,10 @@ export function FaceEnrollWizard({ student, onClose }: FaceEnrollWizardProps) {
         }
         setPhase('capturing')
       } catch {
-        setErrorMessage('Could not access the camera. Check browser permissions.')
-        setPhase('error')
+        if (!cancelled) {
+          setErrorMessage('Could not access the camera. Check browser permissions.')
+          setPhase('error')
+        }
       }
     }
 

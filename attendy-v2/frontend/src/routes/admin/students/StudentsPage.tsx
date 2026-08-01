@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { Plus, ScanFace, Search, Trash2 } from 'lucide-react'
+import { CreditCard, Plus, ScanFace, Search, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { useClassSections } from '../../../hooks/useClassSections'
 import { useDeleteStudent, useStudents } from '../../../hooks/useStudents'
 import type { Student } from '../../../types'
 import { StudentFormModal } from './StudentFormModal'
 import { FaceEnrollWizard } from './FaceEnrollWizard'
+import { IdCardModal } from './IdCardModal'
+import { StudentPhotoThumbnail } from './StudentPhotoThumbnail'
 
 export function StudentsPage() {
   const [classSectionId, setClassSectionId] = useState('')
@@ -13,6 +15,7 @@ export function StudentsPage() {
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [enrollTarget, setEnrollTarget] = useState<Student | null>(null)
+  const [idCardTarget, setIdCardTarget] = useState<Student | null>(null)
 
   const { data: classSections } = useClassSections()
   const { data, isLoading } = useStudents({
@@ -81,6 +84,7 @@ export function StudentsPage() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-left text-xs uppercase text-gray-500 dark:bg-gray-900 dark:text-gray-400">
             <tr>
+              <th className="px-4 py-2.5">Photo</th>
               <th className="px-4 py-2.5">Name</th>
               <th className="px-4 py-2.5">Roll</th>
               <th className="px-4 py-2.5">Class</th>
@@ -91,20 +95,27 @@ export function StudentsPage() {
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
             {isLoading && (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
                   Loading…
                 </td>
               </tr>
             )}
             {!isLoading && students.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-gray-400">
+                <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
                   No students match these filters.
                 </td>
               </tr>
             )}
             {students.map((student) => (
               <tr key={student.id} className="bg-white dark:bg-gray-900">
+                <td className="px-4 py-2.5">
+                  <StudentPhotoThumbnail
+                    studentId={student.id}
+                    hasPhoto={Boolean(student.photo_url)}
+                    name={student.name}
+                  />
+                </td>
                 <td className="px-4 py-2.5 font-medium text-gray-900 dark:text-gray-100">{student.name}</td>
                 <td className="px-4 py-2.5 text-gray-600 dark:text-gray-300">{student.roll_number}</td>
                 <td className="px-4 py-2.5 text-gray-600 dark:text-gray-300">{student.class_section.label}</td>
@@ -122,6 +133,13 @@ export function StudentsPage() {
                 </td>
                 <td className="px-4 py-2.5">
                   <div className="flex items-center justify-end gap-1">
+                    <button
+                      onClick={() => setIdCardTarget(student)}
+                      title="View ID card / QR code"
+                      className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 hover:text-brand-600 dark:hover:bg-gray-800"
+                    >
+                      <CreditCard size={16} />
+                    </button>
                     <button
                       onClick={() => setEnrollTarget(student)}
                       title="Enroll / re-enroll face"
@@ -158,6 +176,10 @@ export function StudentsPage() {
 
       {enrollTarget && (
         <FaceEnrollWizard student={enrollTarget} onClose={() => setEnrollTarget(null)} />
+      )}
+
+      {idCardTarget && (
+        <IdCardModal student={idCardTarget} onClose={() => setIdCardTarget(null)} />
       )}
     </div>
   )

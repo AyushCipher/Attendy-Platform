@@ -10,6 +10,7 @@ from app.core.security import get_current_admin
 from app.db.base import get_db
 from app.db.models.admin import Admin
 from app.db.models.attendance import AttendanceRecord
+from app.db.models.meal import MealRecord
 from app.db.models.student import Student
 from app.schemas.attendance import (
     AttendanceRow,
@@ -21,6 +22,7 @@ from app.schemas.attendance import (
     ManualAttendanceRequest,
 )
 from app.schemas.class_section import ClassSectionOut
+from app.schemas.meal import MealRow, MealSheetResponse
 from app.services import analytics_service
 from app.services.attendance_service import mark_present_if_new
 from app.services.export_service import build_attendance_workbook
@@ -81,6 +83,66 @@ async def get_attendance_sheet(
 
     total_students = len(rows)
     return AttendanceSheetResponse(
+        date=event_date,
+        items=items,
+        total=total_students,
+        present_count=present_count,
+        absent_count=total_students - present_count,
+    )
+
+
+@router.get("/meals", response_model=MealSheetResponse)
+async def get_meal_sheet(
+    event_date: datetime.date = Query(default_factory=datetime.date.today),
+    class_section_id: uuid.UUID | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    search: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Mirrors get_attendance_sheet's filters/shape exactly, reading meal_records
+    instead -- kept as its own route rather than a generic table-parameterized one,
+    same reasoning as mark_meal_if_new alongside mark_present_if_new.
+    """
+    query = (
+        select(Student, MealRecord)
+        .outerjoin(
+            MealRecord,
+            (MealRecord.student_id == Student.id) & (MealRecord.event_date == event_date),
+        )
+        .where(Student.status == "active")
+        .options(selectinload(Student.class_section))
+    )
+    if class_section_id is not None:
+        query = query.where(Student.class_section_id == class_section_id)
+    if search:
+        like = f"%{search}%"
+        query = query.where(or_(Student.name.ilike(like), Student.roll_number.cast(str).ilike(like)))
+
+    rows = (await db.execute(query.order_by(Student.name))).all()
+
+    items: list[MealRow] = []
+    present_count = 0
+    for student, record in rows:
+        is_present = record is not None
+        if is_present:
+            present_count += 1
+        row_status = "present" if is_present else "absent"
+        if status_filter and status_filter != row_status:
+            continue
+        items.append(
+            MealRow(
+                student_id=student.id,
+                name=student.name,
+                roll_number=student.roll_number,
+                class_section=ClassSectionOut.model_validate(student.class_section),
+                status=row_status,
+                event_time=record.event_time if record else None,
+                source=record.source if record else None,
+            )
+        )
+
+    total_students = len(rows)
+    return MealSheetResponse(
         date=event_date,
         items=items,
         total=total_students,

@@ -22,7 +22,7 @@ export function Topbar() {
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4 dark:border-gray-800 dark:bg-gray-900">
       <div className="text-sm text-gray-500 dark:text-gray-400">
-        {admin ? `Signed in as ${admin.fullName}` : ''}
+        {admin ? `Signed in as ${admin.full_name}` : ''}
       </div>
       <div className="flex items-center gap-2">
         <button

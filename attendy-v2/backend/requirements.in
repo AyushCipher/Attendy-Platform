@@ -15,6 +15,8 @@ onnxruntime
 opencv-python-headless
 numpy
 openpyxl
+qrcode
+apscheduler
 faker
 pytest
 pytest-asyncio

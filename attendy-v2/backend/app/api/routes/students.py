@@ -3,7 +3,7 @@ import uuid
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,8 @@ from app.schemas.student import (
     StudentUpdate,
 )
 from app.services.face_engine import get_face_engine
+from app.services.photo_service import load_student_photo, save_student_photo
+from app.services.qr_service import build_qr_png
 
 router = APIRouter(prefix="/students", tags=["students"], dependencies=[Depends(get_current_admin)])
 
@@ -79,16 +81,34 @@ async def list_students(
     return StudentListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
+async def _get_or_create_class_section(db: AsyncSession, grade: int, section: str) -> ClassSection:
+    existing = await db.scalar(
+        select(ClassSection).where(ClassSection.grade == grade, ClassSection.section == section)
+    )
+    if existing is not None:
+        return existing
+
+    class_section = ClassSection(grade=grade, section=section)
+    db.add(class_section)
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Lost a race with a concurrent request creating the same (grade, section).
+        await db.rollback()
+        class_section = await db.scalar(
+            select(ClassSection).where(ClassSection.grade == grade, ClassSection.section == section)
+        )
+    return class_section
+
+
 @router.post("", response_model=StudentOut, status_code=status.HTTP_201_CREATED)
 async def create_student(payload: StudentCreate, db: AsyncSession = Depends(get_db)):
-    class_section = await db.get(ClassSection, payload.class_section_id)
-    if class_section is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown class/section")
+    class_section = await _get_or_create_class_section(db, payload.grade, payload.section)
 
     student = Student(
         name=payload.name,
         roll_number=payload.roll_number,
-        class_section_id=payload.class_section_id,
+        class_section_id=class_section.id,
     )
     db.add(student)
     try:
@@ -101,6 +121,22 @@ async def create_student(payload: StudentCreate, db: AsyncSession = Depends(get_
 
     await db.refresh(student, attribute_names=["class_section"])
     return _to_student_out(student, face_enrolled=False)
+
+
+@router.get("/{student_id}/qr-code")
+async def get_student_qr_code(student_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    student = await _get_student_or_404(student_id, db)
+    png_bytes = build_qr_png(student.id)
+    return Response(content=png_bytes, media_type="image/png")
+
+
+@router.get("/{student_id}/photo")
+async def get_student_photo(student_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    await _get_student_or_404(student_id, db)
+    photo_bytes = load_student_photo(student_id)
+    if photo_bytes is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No photo on file for this student")
+    return Response(content=photo_bytes, media_type="image/jpeg")
 
 
 @router.get("/{student_id}", response_model=StudentOut)
@@ -153,6 +189,7 @@ async def enroll_face(
     usable = 0
     quality_scores: list[float] = []
     rejected_reasons: list[str] = []
+    photo_saved = False
 
     for photo in photos:
         raw = await photo.read()
@@ -182,6 +219,15 @@ async def enroll_face(
         usable += 1
         quality_scores.append(best.det_score)
 
+        if not photo_saved:
+            # The first usable capture of this enrollment session becomes the
+            # student's representative photo -- a re-enrollment naturally refreshes
+            # it, which is the expected behavior.
+            await asyncio.to_thread(save_student_photo, student.id, image)
+            photo_saved = True
+
+    if photo_saved:
+        student.photo_url = "available"
     await db.commit()
 
     total = await db.scalar(

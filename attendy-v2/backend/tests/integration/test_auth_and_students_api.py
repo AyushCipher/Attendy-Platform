@@ -79,41 +79,70 @@ async def test_students_endpoint_requires_auth(api_client):
 
 
 @pytest.mark.asyncio
-async def test_create_and_filter_students(api_client, test_admin, class_section):
+async def test_create_and_filter_students(api_client, test_admin):
     login = await api_client.post(
         "/api/auth/login", json={"email": test_admin.email, "password": "pytest-password"}
     )
     token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
+    # Routes under test commit for real (see api_client's fixture docstring), so a
+    # random roll number avoids colliding with a previous local run's leftover row
+    # under the same fixed grade/section.
+    roll_number = uuid.uuid4().int % 90000 + 10000
+
+    # grade/section (not class_section_id) is the actual create payload now -- the
+    # route get-or-creates the class_section row, matching the two-dropdown picker
+    # in the frontend (Class 1-12 / Section A-F) that replaced the old free-text
+    # "+ New class/section" flow.
     create_resp = await api_client.post(
         "/api/students",
-        json={"name": "Filter Test Student", "roll_number": 12345, "class_section_id": str(class_section.id)},
+        json={"name": "Filter Test Student", "roll_number": roll_number, "grade": 9, "section": "A"},
         headers=headers,
     )
     assert create_resp.status_code == 201
     created = create_resp.json()
     assert created["face_enrolled"] is False
+    class_section_id = created["class_section"]["id"]
 
-    # Filtering by this class_section should surface exactly the student we just made.
-    list_resp = await api_client.get(
-        "/api/students", params={"class_section_id": str(class_section.id)}, headers=headers
-    )
-    assert list_resp.status_code == 200
-    body = list_resp.json()
-    assert any(s["id"] == created["id"] for s in body["items"])
+    try:
+        # Filtering by this class_section should surface exactly the student we just made.
+        list_resp = await api_client.get(
+            "/api/students", params={"class_section_id": class_section_id}, headers=headers
+        )
+        assert list_resp.status_code == 200
+        body = list_resp.json()
+        assert any(s["id"] == created["id"] for s in body["items"])
 
-    # A different class_section filter must exclude it.
-    other_resp = await api_client.get(
-        "/api/students", params={"class_section_id": "00000000-0000-0000-0000-000000000000"}, headers=headers
-    )
-    assert other_resp.status_code == 200
-    assert not any(s["id"] == created["id"] for s in other_resp.json()["items"])
+        # A different class_section filter must exclude it.
+        other_resp = await api_client.get(
+            "/api/students",
+            params={"class_section_id": "00000000-0000-0000-0000-000000000000"},
+            headers=headers,
+        )
+        assert other_resp.status_code == 200
+        assert not any(s["id"] == created["id"] for s in other_resp.json()["items"])
 
-    # Duplicate roll number in the same class/section must be rejected.
-    dup_resp = await api_client.post(
-        "/api/students",
-        json={"name": "Duplicate Roll", "roll_number": 12345, "class_section_id": str(class_section.id)},
-        headers=headers,
-    )
-    assert dup_resp.status_code == 409
+        # Duplicate roll number in the same class/section must be rejected.
+        dup_resp = await api_client.post(
+            "/api/students",
+            json={"name": "Duplicate Roll", "roll_number": roll_number, "grade": 9, "section": "A"},
+            headers=headers,
+        )
+        assert dup_resp.status_code == 409
+
+        # An invalid section is rejected before it ever reaches the database.
+        invalid_resp = await api_client.post(
+            "/api/students",
+            json={"name": "Bad Section", "roll_number": roll_number + 1, "grade": 9, "section": "Z"},
+            headers=headers,
+        )
+        assert invalid_resp.status_code == 422
+    finally:
+        async with async_session_factory() as cleanup_session:
+            from app.db.models.student import Student
+
+            existing = await cleanup_session.get(Student, created["id"])
+            if existing is not None:
+                await cleanup_session.delete(existing)
+                await cleanup_session.commit()

@@ -1,10 +1,12 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, ClipboardList, Users, Camera } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, Users, Camera, UtensilsCrossed, BookOpen } from 'lucide-react'
 import clsx from 'clsx'
 
 const links = [
   { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/admin/attendance', label: 'Attendance', icon: ClipboardList },
+  { to: '/admin/meals', label: 'Mess', icon: UtensilsCrossed },
+  { to: '/admin/library', label: 'Library', icon: BookOpen },
   { to: '/admin/students', label: 'Students', icon: Users },
   { to: '/admin/scan', label: 'Scan', icon: Camera },
 ]

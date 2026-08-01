@@ -3,7 +3,7 @@ import { create } from 'zustand'
 interface Admin {
   id: string
   email: string
-  fullName: string
+  full_name: string
 }
 
 interface AuthState {
