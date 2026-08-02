@@ -14,6 +14,7 @@ insightface
 onnxruntime
 opencv-python-headless
 numpy
+scipy
 openpyxl
 qrcode
 apscheduler

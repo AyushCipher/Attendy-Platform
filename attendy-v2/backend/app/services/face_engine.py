@@ -27,8 +27,18 @@ class DetectedFace:
 
 class FaceEngine:
     def __init__(self, model_pack: str) -> None:
-        self._app = FaceAnalysis(name=model_pack, providers=["CPUExecutionProvider"])
-        self._app.prepare(ctx_id=0, det_size=(640, 640))
+        # buffalo_l bundles 5 ONNX models (detection, recognition, 3D/2D landmarks,
+        # age/gender); FaceAnalysis runs all of them by default. DetectedFace only
+        # ever reads bbox/embedding/det_score/kps -- all produced by detection +
+        # recognition alone -- so the other 3 are pure wasted compute on every frame.
+        # Benchmarked (scripts/benchmark_face_detect.py) on a real enrollment photo:
+        # all 5 models at det_size 640 -> ~1.8s/frame; detection+recognition only at
+        # det_size 320 -> ~0.4-0.5s/frame. Embeddings are bit-identical either way
+        # (verified: same detector + same recognition net + same alignment).
+        self._app = FaceAnalysis(
+            name=model_pack, allowed_modules=["detection", "recognition"], providers=["CPUExecutionProvider"]
+        )
+        self._app.prepare(ctx_id=0, det_size=(320, 320))
 
     def detect(self, bgr_image: np.ndarray) -> list[DetectedFace]:
         faces = self._app.get(bgr_image)

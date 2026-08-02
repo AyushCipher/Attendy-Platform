@@ -3,8 +3,10 @@
 This is the same shape as the legacy `face_recognition_system.py`'s smoothing design
 (track faces across frames, require several consistent recognitions before confirming),
 carried over deliberately because it was a genuinely good idea -- it's now fed by
-pgvector cosine similarity instead of LBPH distance, and face-tracking uses IoU instead
-of raw center-proximity (more robust to head movement).
+pgvector cosine similarity instead of LBPH distance, and frame-to-frame face-to-track
+assignment is a proper Hungarian-algorithm optimal matching (scipy) instead of a
+greedy nearest-IoU pick, so two faces close together in frame can't have one steal the
+other's track just because it was processed first.
 
 Liveness here is a bbox-motion heuristic (a photo held perfectly still won't show the
 natural micro-drift a live face does over ~1-2 seconds) -- explicitly not a production
@@ -14,12 +16,16 @@ from collections import deque
 from dataclasses import dataclass, field
 from uuid import UUID
 
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
 BBox = tuple[float, float, float, float]
 
-HISTORY_LENGTH = 8
-MIN_CONSISTENT_FRAMES = 5
+HISTORY_LENGTH = 6
+MIN_CONSISTENT_FRAMES = 4
 IOU_MATCH_THRESHOLD = 0.3
 MIN_MOTION_PX = 3.0  # minimum bbox-center drift across the history window to pass liveness
+MAX_UNMATCHED_FRAMES = HISTORY_LENGTH * 2  # a track this stale is a face that left frame
 
 
 def _iou(a: BBox, b: BBox) -> float:
@@ -41,6 +47,7 @@ class _TrackedFace:
     history: deque[tuple[UUID | None, float]] = field(default_factory=lambda: deque(maxlen=HISTORY_LENGTH))
     centers: deque[tuple[float, float]] = field(default_factory=lambda: deque(maxlen=HISTORY_LENGTH))
     already_marked_today: bool = False
+    unmatched_frames: int = 0
 
 
 @dataclass
@@ -57,26 +64,45 @@ class FaceTracker:
     def __init__(self) -> None:
         self._tracks: list[_TrackedFace] = []
 
-    def _find_or_create_track(self, bbox: BBox) -> _TrackedFace:
-        best_track, best_iou = None, 0.0
+    def assign(self, bboxes: list[BBox]) -> list[_TrackedFace]:
+        """Globally-optimal one-to-one assignment of this frame's detected face boxes
+        to existing tracks (Hungarian algorithm over an IoU cost matrix), returned in
+        the same order as `bboxes`. A detection with no track scoring >= threshold
+        (or when there are more detections than tracks) starts a new track. Tracks
+        that go unmatched for too many consecutive frames are dropped, so a
+        long-running kiosk connection doesn't accumulate stale tracks (and an
+        ever-growing cost matrix) for faces that walked away.
+        """
         for track in self._tracks:
-            score = _iou(track.bbox, bbox)
-            if score > best_iou:
-                best_track, best_iou = track, score
+            track.unmatched_frames += 1
 
-        if best_track is not None and best_iou >= IOU_MATCH_THRESHOLD:
-            best_track.bbox = bbox
-            return best_track
+        assigned: dict[int, _TrackedFace] = {}
+        if bboxes and self._tracks:
+            cost = np.array([[1.0 - _iou(b, t.bbox) for t in self._tracks] for b in bboxes])
+            row_idx, col_idx = linear_sum_assignment(cost)
+            for r, c in zip(row_idx, col_idx, strict=True):
+                if cost[r, c] <= 1.0 - IOU_MATCH_THRESHOLD:
+                    track = self._tracks[c]
+                    track.bbox = bboxes[r]
+                    track.unmatched_frames = 0
+                    assigned[r] = track
 
-        new_track = _TrackedFace(bbox=bbox)
-        self._tracks.append(new_track)
-        return new_track
+        results = []
+        for i, bbox in enumerate(bboxes):
+            if i in assigned:
+                results.append(assigned[i])
+            else:
+                new_track = _TrackedFace(bbox=bbox)
+                self._tracks.append(new_track)
+                results.append(new_track)
 
-    def update(self, bbox: BBox, student_id: UUID | None, similarity: float) -> SmoothedResult:
-        track = self._find_or_create_track(bbox)
+        self._tracks = [t for t in self._tracks if t.unmatched_frames <= MAX_UNMATCHED_FRAMES]
+        return results
+
+    def update_track(self, track: _TrackedFace, student_id: UUID | None, similarity: float) -> SmoothedResult:
         track.history.append((student_id, similarity))
 
-        cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+        cx, cy = (track.bbox[0] + track.bbox[2]) / 2, (track.bbox[1] + track.bbox[3]) / 2
         track.centers.append((cx, cy))
 
         counts: dict[UUID | None, list[float]] = {}
@@ -101,13 +127,12 @@ class FaceTracker:
             live=live,
         )
 
-    def mark_recorded(self, student_id: UUID) -> None:
-        for track in self._tracks:
-            if track.history and track.history[-1][0] == student_id:
-                track.already_marked_today = True
+    @staticmethod
+    def mark_recorded(track: _TrackedFace) -> None:
+        track.already_marked_today = True
 
-    def already_recorded(self, bbox: BBox) -> bool:
-        track = self._find_or_create_track(bbox)
+    @staticmethod
+    def already_recorded(track: _TrackedFace) -> bool:
         return track.already_marked_today
 
     @staticmethod

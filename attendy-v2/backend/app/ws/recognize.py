@@ -11,11 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import decode_token
 from app.db.base import get_db
 from app.db.models.book import Book
-from app.db.models.book_borrow import BookBorrow
 from app.db.models.student import Student
 from app.services.attendance_service import mark_present_if_new
 from app.services.face_engine import get_face_engine
-from app.services.library_service import compute_fine, get_open_borrow
+from app.services.library_service import compute_fine, get_open_borrow, try_borrow
 from app.services.matcher import find_best_match, get_student_if_active
 from app.services.meal_service import mark_meal_if_new
 from app.services.tracker import FaceTracker
@@ -131,14 +130,15 @@ async def _handle_library_frame(
 
     if current_student is None:
         faces = await asyncio.to_thread(engine.detect, image)
+        tracks = tracker.assign([face.bbox for face in faces])
         face_results = []
         identified: Student | None = None
 
-        for face in faces:
+        for face, track in zip(faces, tracks, strict=True):
             match = await find_best_match(db, face.embedding)
             matched_student_id = match.student_id if (match and match.is_match) else None
             similarity = match.similarity if match else 0.0
-            smoothed = tracker.update(face.bbox, matched_student_id, similarity)
+            smoothed = tracker.update_track(track, matched_student_id, similarity)
 
             entry_status, name = "unknown", None
             if smoothed.confirmed and smoothed.student_id:
@@ -237,15 +237,20 @@ async def _handle_library_frame(
     student_brief = _student_brief(current_student)
 
     if open_borrow is None:
-        db.add(
-            BookBorrow(
-                book_id=book.id,
-                student_id=current_student.id,
-                class_section_id=current_student.class_section_id,
-            )
-        )
-        await db.commit()
         state["current_student"] = None
+        borrow = await try_borrow(db, book.id, current_student.id, current_student.class_section_id)
+        if borrow is None:
+            # Lost the race: another scan of this same book committed first between
+            # our get_open_borrow() check above and this insert.
+            return {
+                "stage": "done",
+                "student": student_brief,
+                "book": {"id": str(book.id), "name": book.name},
+                "action": "rejected",
+                "message": f"{book.name} was just borrowed by someone else",
+                "faces": [],
+                "qr": {"points": qr_points, "status": "unknown", "name": book.name},
+            }
         return {
             "stage": "done",
             "student": student_brief,
@@ -318,14 +323,15 @@ async def recognize(
                 continue
 
             faces = await asyncio.to_thread(engine.detect, image)
+            tracks = tracker.assign([face.bbox for face in faces])
             results = []
 
-            for face in faces:
+            for face, track in zip(faces, tracks, strict=True):
                 match = await find_best_match(db, face.embedding)
                 matched_student_id = match.student_id if (match and match.is_match) else None
                 similarity = match.similarity if match else 0.0
 
-                smoothed = tracker.update(face.bbox, matched_student_id, similarity)
+                smoothed = tracker.update_track(track, matched_student_id, similarity)
 
                 entry = {
                     "bbox": face.bbox,
@@ -339,7 +345,7 @@ async def recognize(
                     student = await get_student_if_active(db, smoothed.student_id)
                     if student is None:
                         entry["status"] = "unknown"
-                    elif tracker.already_recorded(face.bbox):
+                    elif tracker.already_recorded(track):
                         entry["status"] = "already_marked"
                         entry["name"] = student.name
                     else:
@@ -348,7 +354,7 @@ async def recognize(
                         )
                         entry["name"] = student.name
                         entry["status"] = "confirmed" if marked else "already_marked"
-                        tracker.mark_recorded(student.id)
+                        tracker.mark_recorded(track)
                 elif matched_student_id:
                     entry["status"] = "recognizing"
 

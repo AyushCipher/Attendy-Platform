@@ -121,9 +121,9 @@ flowchart LR
     Dash -- filtered query --> API --> DB
 ```
 
-Full system design, the event-log data model, and the reasoning behind harder
-decisions (browser-side camera capture, WebSockets over SSE, why an event log instead
-of a status column) live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+The reasoning behind harder decisions (WebSockets over SSE, event log vs a status
+column, HNSW vs IVFFlat, fine idempotency, and the WS broadcast's single-instance
+limitation) is written up as short ADRs in [`docs/adr/`](docs/adr/README.md).
 
 ## Tech Stack
 

@@ -34,6 +34,13 @@ async def _test_database():
     demo data (this bug was found the hard way: tests silently depended on the dev
     DB's face_embeddings table being empty, which broke the moment real students got
     enrolled through manual API testing in the same session).
+
+    Base.metadata.create_all only creates *missing* tables -- it does NOT add new
+    columns/constraints/indexes to a table that already exists from a previous run.
+    A schema change to an existing model (e.g. adding an index) needs a locally
+    already-created `attendy_test` DB dropped by hand once (`DROP DATABASE
+    attendy_test` against the dev server) so it gets rebuilt from the current models.
+    CI doesn't hit this since its Postgres service starts empty every run.
     """
     admin_engine = create_async_engine(_dev_db_url_for_bootstrap, isolation_level="AUTOCOMMIT")
     async with admin_engine.connect() as conn:
