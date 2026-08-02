@@ -43,6 +43,16 @@ export function useDeleteBook() {
   })
 }
 
+export function useReactivateBook() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (bookId: string) => (await api.post<Book>(`/books/${bookId}/reactivate`)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['books'] })
+    },
+  })
+}
+
 export function useBorrowedBooks() {
   return useQuery({
     queryKey: ['book-borrows'],

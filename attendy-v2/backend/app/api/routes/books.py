@@ -80,6 +80,25 @@ async def delete_book(book_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
 
+@router.post("/{book_id}/reactivate", response_model=BookOut)
+async def reactivate_book(book_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Undoes a retire. serial_number is unique across all statuses, so a retired
+    book still blocks re-registering the same serial -- reactivating the existing
+    row is the way back, not creating a new one.
+    """
+    book = await _get_book_or_404(book_id, db)
+    book.status = "active"
+    await db.commit()
+    await db.refresh(book)
+
+    currently_borrowed = (
+        await db.execute(
+            select(exists().where(BookBorrow.book_id == book.id, BookBorrow.returned_at.is_(None)))
+        )
+    ).scalar_one()
+    return _to_book_out(book, currently_borrowed=currently_borrowed)
+
+
 @router.get("/borrows", response_model=BookBorrowListResponse)
 async def list_borrows(
     only_open: bool = Query(default=True),

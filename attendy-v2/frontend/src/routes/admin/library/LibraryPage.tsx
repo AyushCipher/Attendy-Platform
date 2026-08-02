@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { AlertTriangle, Plus, QrCode, Search, Trash2 } from 'lucide-react'
+import { AlertTriangle, Plus, QrCode, RotateCcw, Search, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
-import { useBooks, useBorrowedBooks, useDeleteBook, useSettleFine } from '../../../hooks/useBooks'
+import { useBooks, useBorrowedBooks, useDeleteBook, useReactivateBook, useSettleFine } from '../../../hooks/useBooks'
 import type { Book } from '../../../types/book'
 import { BookFormModal } from './BookFormModal'
 import { BookQrModal } from './BookQrModal'
@@ -14,6 +14,7 @@ export function LibraryPage() {
 
   const { data, isLoading } = useBooks({ search: search || undefined, status: statusFilter || undefined })
   const deleteBook = useDeleteBook()
+  const reactivateBook = useReactivateBook()
   const { data: borrowsData } = useBorrowedBooks()
   const settleFine = useSettleFine()
 
@@ -112,15 +113,26 @@ export function LibraryPage() {
                     >
                       <QrCode size={16} />
                     </button>
-                    <button
-                      onClick={() => {
-                        if (confirm(`Retire ${book.name}?`)) deleteBook.mutate(book.id)
-                      }}
-                      title="Retire"
-                      className="rounded-lg p-1.5 text-gray-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    {book.status === 'retired' ? (
+                      <button
+                        onClick={() => reactivateBook.mutate(book.id)}
+                        disabled={reactivateBook.isPending}
+                        title="Reactivate"
+                        className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 hover:text-brand-600 dark:hover:bg-gray-800"
+                      >
+                        <RotateCcw size={16} />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          if (confirm(`Retire ${book.name}?`)) deleteBook.mutate(book.id)
+                        }}
+                        title="Retire"
+                        className="rounded-lg p-1.5 text-gray-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
