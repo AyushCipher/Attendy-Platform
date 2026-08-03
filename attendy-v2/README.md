@@ -51,9 +51,11 @@ recognizer that simply didn't work reliably after training.
   - **Library** — a two-step scan (identify the student by face or QR, then scan a
     book's QR) that borrows or returns it, rejecting a book already out to someone
     else.
-- **Temporal smoothing + liveness** — a per-connection face tracker (IoU-based) requires
-  5-of-8 consistent frame matches before confirming an identity, plus a
-  bounding-box-motion check so a photo held up to the camera can't be marked present.
+- **Temporal smoothing + liveness** — a per-connection face tracker assigns detections to
+  tracks via the Hungarian algorithm over an IoU cost matrix (so two faces close together
+  can't steal each other's track) and requires 4-of-6 consistent frame matches before
+  confirming an identity, plus a bounding-box-motion check so a photo held up to the
+  camera can't be marked present.
   (QR identification skips this gate entirely — a decoded UUID is an exact match,
   nothing probabilistic to smooth over.)
 - **Overdue library fines** — ₹100 per 7-day period a book remains unreturned,
@@ -183,7 +185,9 @@ attendy-v2/
 │       └── store/                 # Zustand auth store
 ├── docs/
 │   ├── ARCHITECTURE.md
-│   └── NEON_SUPABASE_SWAP.md
+│   ├── NEON_SUPABASE_SWAP.md
+│   └── adr/                    # ADRs: WebSockets vs SSE, event log vs status column,
+│                                #   HNSW vs IVFFlat, fine idempotency, WS single-instance
 ├── docker-compose.yml          # db + adminer always; backend + frontend under `full` profile
 └── .github/workflows/ci.yml
 ```
